@@ -1,0 +1,4 @@
+# Signature crons to allow crons with specified ENV to be managed by this program.
+signature_key:   EXPECTED_ENV_KEY_ON_CRON
+signature_value: EXPECTED_ENV_VALUE_ON_CRON
+

@@ -1,0 +1,115 @@
+#!/usr/bin/env -S bundle exec ruby
+require 'fileutils'
+require 'digest'
+Bundler.require :default, :default
+
+def Dir.glob_ext(*args, **kwargs)
+  append_base = !kwargs[:base].nil?
+  if block_given? then
+    Dir.glob(*args, **kwargs) do |fn|
+      if append_base
+        yield File.join(kwargs[:base], fn)
+      else
+        yield fn
+      end
+    end
+  else
+    Dir.glob(*args, **kwargs).map do |fn|
+      append_base ? File.join(kwargs[:base], fn) : fn
+    end
+  end
+end
+
+unless File.exists?(File.expand_path('./config.yml', __dir__))
+  $stderr.puts 'config file not found.'
+  exit 1
+end
+CONFIG = YAML.safe_load(File.read(File.expand_path('./config.yml', __dir__)), aliases: true, symbolize_names: true).freeze
+
+unless CONFIG.key?(:signature_key) && CONFIG.key?(:signature_value)
+  $stderr.puts 'signature config unset'
+  exit 2
+end
+SIGNATURE_REGEX = Regexp.new(
+  sprintf(
+    '^\s*%1$s=(?:(?:%2$s)|(?:\'%2$s\')|(?:"%2$s"))$',
+    Regexp.escape(CONFIG[:signature_key]),
+    Regexp.escape(CONFIG[:signature_value]),
+  ),
+)
+
+LOCAL_PATH  = File.expand_path('./jobs', __dir__)
+DEPLOY_PATH = '/etc/cron.d'
+
+@cron_files_local    = []
+@cron_files_deployed = []
+
+[
+  [@cron_files_local,    LOCAL_PATH],
+  [@cron_files_deployed, DEPLOY_PATH],
+].each do |(cron_files, base_dir)|
+  Dir.glob_ext('*', base: base_dir) do |fn|
+    cron_file = File.readlines(fn)
+    is_match = cron_file.any? do |line|
+      SIGNATURE_REGEX =~ line
+    end
+    next unless is_match
+    cron_files << fn
+  end
+end
+
+def normalize_local(file)
+  File.join(LOCAL_PATH, File.basename(file))
+end
+
+def normalize_deploy(file)
+  File.join(DEPLOY_PATH, File.basename(file))
+end
+
+def add_file(file)
+  FileUtils.cp(normalize_local(file), DEPLOY_PATH)
+end
+
+def delete_file(file)
+  FileUtils.rm(normalize_deploy(file))
+end
+
+def add_files
+  @cron_files_local.each &method(:add_file)
+end
+
+def delete_files
+  @cron_files_deployed.each &method(:delete_file)
+end
+
+def sync_files
+  base_local  = @cron_files_local.map(&File.method(:basename))
+  base_deploy = @cron_files_deployed.map(&File.method(:basename))
+  to_add    = base_local - base_deploy
+  to_delete = base_deploy - base_local
+  
+  (base_local & base_deploy).each do |base_name|
+    local_hash  = Digest::SHA256.file(normalize_local(base_name))
+    deploy_hash = Digest::SHA256.file(normalize_deploy(base_name))
+    
+    to_add << base_name if local_hash != deploy_hash
+  end
+  
+  to_add.each &:method(:add_file)
+  to_delete.each &:method(:delete_file)
+end
+
+if $0 == __FILE then
+  mode = ARGV.shift
+  case mode
+  when 'add'
+    add_files
+  when 'delete'
+    delete_files
+  when nil, 'sync'
+    sync_files
+  else
+    $stderr.puts "acceptable commands are: add | delete | sync"
+    exit 1
+  end
+end
