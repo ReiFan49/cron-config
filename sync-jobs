@@ -95,11 +95,11 @@ def sync_files
     to_add << base_name if local_hash != deploy_hash
   end
   
-  to_add.each &:method(:add_file)
-  to_delete.each &:method(:delete_file)
+  to_add.each &method(:add_file)
+  to_delete.each &method(:delete_file)
 end
 
-if $0 == __FILE then
+if $0 == __FILE__ then
   mode = ARGV.shift
   case mode
   when 'add'
